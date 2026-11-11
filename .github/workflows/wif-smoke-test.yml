@@ -65,13 +65,4 @@ jobs:
             --data '{"sql":"SELECT 42 AS value"}')"
           unset RAWTREE_ACCESS_TOKEN
 
-          python - <<'PY' <<< "$QUERY_RESPONSE"
-          import json, sys
-          result = json.load(sys.stdin)
-          rows = result.get("data", [])
-          if not rows or rows[0].get("value") != 42:
-              print("RawTree authenticated, but the validation query returned an unexpected result.")
-              print(json.dumps(result))
-              raise SystemExit(1)
-          print("PASS: GitHub OIDC assertion exchanged successfully and RawTree returned SELECT 42 AS value.")
-          PY
+          python -c 'import json,sys; r=json.load(sys.stdin); rows=r.get("data", []); ok=bool(rows) and rows[0].get("value")==42; print("PASS: GitHub OIDC assertion exchanged successfully and RawTree returned SELECT 42 AS value." if ok else "Unexpected query result: "+json.dumps(r)); sys.exit(0 if ok else 1)' <<< "$QUERY_RESPONSE"
