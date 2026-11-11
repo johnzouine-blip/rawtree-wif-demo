@@ -13,14 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Request GitHub OIDC token and inspect claims
-        env:
-          OIDC_REQUEST_URL: ${{ secrets.ACTIONS_ID_TOKEN_REQUEST_URL }}
-          OIDC_REQUEST_TOKEN: ${{ secrets.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
+        shell: bash
         run: |
           set -euo pipefail
 
-          # GitHub provides these two values automatically to jobs with id-token: write.
-          # They are runtime variables, not repository secrets.
           : "${ACTIONS_ID_TOKEN_REQUEST_URL:?Missing GitHub OIDC request URL}"
           : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?Missing GitHub OIDC request token}"
 
@@ -42,8 +38,6 @@ jobs:
           payload = parts[1] + "=" * (-len(parts[1]) % 4)
           claims = json.loads(base64.urlsafe_b64decode(payload))
 
-          # Never print the JWT itself. Only print the claims needed to configure
-          # the RawTree issuer and federation rule.
           expected = {
               "iss": "https://token.actions.githubusercontent.com",
               "aud": "rawtree",
