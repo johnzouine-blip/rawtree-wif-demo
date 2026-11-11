@@ -51,7 +51,7 @@ jobs:
           EXCHANGE_BODY="${EXCHANGE_RESPONSE%$'\\n'__HTTP_STATUS__:*}"
           if [[ "$EXCHANGE_HTTP_STATUS" != "200" ]]; then
             echo "RawTree token exchange returned HTTP ${EXCHANGE_HTTP_STATUS}."
-            python -c 'import json,sys; s=sys.stdin.read();\ntry:\n d=json.loads(s); print(json.dumps({k:d[k] for k in ("error","error_description","message","detail","code") if k in d}) or "RawTree returned an error response without a standard message.")\nexcept Exception: print("RawTree returned a non-JSON error response.")' <<< "$EXCHANGE_BODY"
+            python -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps({k:d[k] for k in ("error","error_description","message","detail","code") if k in d}) or "RawTree returned an error response without a standard message.")' <<< "$EXCHANGE_BODY"
             exit 1
           fi
           echo "STEP 2 complete: RawTree issued an access token."
