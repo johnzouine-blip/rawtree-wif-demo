@@ -83,7 +83,7 @@ jobs:
           echo "  3/3  DATABASE QUERY"
           echo "============================================================"
           echo "Running SELECT 42 AS value against ${RAWTREE_DATABASE}..."
-          QUERY_RESPONSE="$(curl --fail-with-body --silent --show-error \
+          QUERY_RESPONSE="$(curl --silent --show-error --write-out '__HTTP_STATUS__%{http_code}' \
             -X POST "${RAWTREE_URL%/}/v1/query" \
             -H "Authorization: Bearer ${RAWTREE_ACCESS_TOKEN}" \
             -H "Content-Type: application/json" \
@@ -91,7 +91,16 @@ jobs:
             --data '{"sql":"SELECT 42 AS value"}')"
           unset RAWTREE_ACCESS_TOKEN
 
-          python -c 'import json,sys; r=json.load(sys.stdin); rows=r.get("data", []); ok=bool(rows) and rows[0].get("value")==42; print("SUCCESS: Query returned value = 42." if ok else "Unexpected query result: "+json.dumps(r)); sys.exit(0 if ok else 1)' <<< "$QUERY_RESPONSE"
+          QUERY_HTTP_STATUS="${QUERY_RESPONSE##*__HTTP_STATUS__}"
+          QUERY_BODY="${QUERY_RESPONSE%__HTTP_STATUS__*}"
+          if [[ "$QUERY_HTTP_STATUS" != "200" ]]; then
+            echo "FAILED: RawTree query returned HTTP ${QUERY_HTTP_STATUS}."
+            echo "RawTree error response (no credentials included):"
+            python -c 'import json,sys; s=sys.stdin.read();\ntry: print(json.dumps(json.loads(s), indent=2))\nexcept Exception: print(s[:4000])' <<< "$QUERY_BODY"
+            exit 1
+          fi
+
+          python -c 'import json,sys; r=json.load(sys.stdin); rows=r.get("data", []); ok=bool(rows) and rows[0].get("value")==42; print("SUCCESS: Query returned value = 42." if ok else "Unexpected query result: "+json.dumps(r)); sys.exit(0 if ok else 1)' <<< "$QUERY_BODY"
 
           echo ""
           echo "============================================================"
