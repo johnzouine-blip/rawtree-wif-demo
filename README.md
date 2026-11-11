@@ -21,6 +21,25 @@ For this repository (created after GitHub's July 15, 2026 immutable-subject roll
 
 The RawTree issuer must use the issuer URL exactly as shown. The federation rule's allowed audience must contain `rawtree`, and its `sub` claim condition must exactly match the subject above. RawTree claim conditions are exact matches.
 
+## RawTree federation rule to create
+
+Create the rule in the same RawTree cluster where the `analytics` database exists. Use these values:
+
+| Field | Value |
+|---|---|
+| Issuer URL | `https://token.actions.githubusercontent.com` |
+| Allowed audience | `rawtree` |
+| Claim condition | `sub` equals `repo:johnzouine-blip@355236458/rawtree-wif-demo@1453687571:ref:refs/heads/main` |
+| Principal type | Your chosen RawTree user or service account |
+| Principal ID | The UUID of that user or service account |
+| Permission | `read_only` for a query-only smoke test |
+| Database | `analytics` |
+| Enabled | Yes |
+
+The rule also needs the target cluster selected. Do not use a GitHub Environment for this first test; the workflow is intentionally configured to run on `main` without one. The `sub` condition pins trust to this repository and branch.
+
+If the demo should insert rows from GitHub Actions rather than only authenticate and query, change the permission to `read_write`. Set exactly one of `permission` or `database_roles` in the rule.
+
 ## Run it
 
 1. In GitHub, open **Actions**.
