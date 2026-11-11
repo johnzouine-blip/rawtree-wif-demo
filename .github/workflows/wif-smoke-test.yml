@@ -1,0 +1,74 @@
+name: RawTree WIF smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  oidc-smoke-test:
+    name: Request GitHub OIDC assertion
+    runs-on: ubuntu-latest
+    steps:
+      - name: Request GitHub OIDC token and inspect claims
+        env:
+          OIDC_REQUEST_URL: ${{ secrets.ACTIONS_ID_TOKEN_REQUEST_URL }}
+          OIDC_REQUEST_TOKEN: ${{ secrets.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # GitHub provides these two values automatically to jobs with id-token: write.
+          # They are runtime variables, not repository secrets.
+          : "${ACTIONS_ID_TOKEN_REQUEST_URL:?Missing GitHub OIDC request URL}"
+          : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?Missing GitHub OIDC request token}"
+
+          RESPONSE="$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=rawtree")"
+
+          TOKEN="$(python -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<< "$RESPONSE")"
+          export TOKEN
+
+          python - <<'PY'
+          import base64, json, os, time
+
+          token = os.environ["TOKEN"]
+          parts = token.split(".")
+          if len(parts) != 3:
+              raise SystemExit("GitHub did not return a three-part JWT")
+
+          payload = parts[1] + "=" * (-len(parts[1]) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(payload))
+
+          # Never print the JWT itself. Only print the claims needed to configure
+          # the RawTree issuer and federation rule.
+          expected = {
+              "iss": "https://token.actions.githubusercontent.com",
+              "aud": "rawtree",
+              "sub": "repo:johnzouine-blip/rawtree-wif-demo:ref:refs/heads/main",
+          }
+
+          print("GitHub OIDC claims (JWT redacted):")
+          for key in ("iss", "aud", "sub", "repository", "repository_owner", "ref", "event_name", "iat", "nbf", "exp", "jti"):
+              if key in claims:
+                  print(f"{key}: {claims[key]}")
+
+          errors = []
+          for key, value in expected.items():
+              actual = claims.get(key)
+              if actual != value and not (key == "aud" and isinstance(actual, list) and value in actual):
+                  errors.append(f"{key}: expected {value!r}, received {actual!r}")
+
+          if claims.get("exp", 0) <= time.time():
+              errors.append("exp: token is already expired")
+
+          if errors:
+              print("\nClaim check failed:")
+              for error in errors:
+                  print(f"- {error}")
+              raise SystemExit(1)
+
+          print("\nPASS: issuer, audience, subject, and expiry match the intended test configuration.")
+          PY
