@@ -41,7 +41,7 @@ jobs:
           expected = {
               "iss": "https://token.actions.githubusercontent.com",
               "aud": "rawtree",
-              "sub": "repo:johnzouine-blip/rawtree-wif-demo:ref:refs/heads/main",
+              "sub": "repo:johnzouine-blip@355236458/rawtree-wif-demo@1453687571:ref:refs/heads/main",
           }
 
           print("GitHub OIDC claims (JWT redacted):")
