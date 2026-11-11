@@ -10,13 +10,13 @@ This is the safe first step before enabling token exchange: it proves what GitHu
 
 ## Expected claims for this repository
 
-For a workflow run on the `main` branch without a GitHub Environment:
+For this repository (created after GitHub's July 15, 2026 immutable-subject rollout), a workflow run on the `main` branch without a GitHub Environment should use:
 
 | Claim | Expected value |
 |---|---|
 | `iss` | `https://token.actions.githubusercontent.com` |
 | `aud` | `rawtree` |
-| `sub` | `repo:johnzouine-blip/rawtree-wif-demo:ref:refs/heads/main` |
+| `sub` | `repo:johnzouine-blip@355236458/rawtree-wif-demo@1453687571:ref:refs/heads/main` |
 | `ref` | `refs/heads/main` |
 
 The RawTree issuer must use the issuer URL exactly as shown. The federation rule's allowed audience must contain `rawtree`, and its `sub` claim condition must exactly match the subject above. RawTree claim conditions are exact matches.
@@ -28,7 +28,7 @@ The RawTree issuer must use the issuer URL exactly as shown. The federation rule
 3. Select **Run workflow** and choose the `main` branch.
 4. Open the run and inspect the **Request GitHub OIDC token and inspect claims** step.
 
-No repository secrets or GitHub Environment are needed. GitHub automatically provides the OIDC request variables to jobs with `id-token: write`.
+No repository secrets or GitHub Environment are needed. The expected subject includes the immutable owner and repository IDs reported by GitHub. GitHub automatically provides the OIDC request variables to jobs with `id-token: write`.
 
 ## Token exchange comes next
 
