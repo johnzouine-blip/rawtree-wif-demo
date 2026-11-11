@@ -28,7 +28,6 @@ jobs:
           : "${ACTIONS_ID_TOKEN_REQUEST_URL:?GitHub OIDC is unavailable}"
           : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?GitHub OIDC is unavailable}"
 
-          # Request a fresh GitHub-signed assertion for the audience trusted by the rule.
           echo "STEP 1: Requesting GitHub OIDC assertion."
           OIDC_RESPONSE="$(curl --fail-with-body --silent --show-error --get \
             -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
@@ -38,17 +37,16 @@ jobs:
           unset OIDC_RESPONSE
           echo "STEP 1 complete: GitHub OIDC assertion received."
 
-          # Exchange the assertion against the existing federation rule.
           echo "STEP 2: Exchanging assertion with RawTree."
-          EXCHANGE_RESPONSE="$(curl --silent --show-error --write-out __HTTP_STATUS__:%{http_code}' \
+          EXCHANGE_RESPONSE="$(curl --silent --show-error --write-out $'\\n%{http_code}' \
             -X POST "${RAWTREE_URL%/}/oauth/token" \
             --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer' \
             --data-urlencode "federation_rule_id=${RAWTREE_FEDERATION_RULE_ID}" \
             --data-urlencode "assertion=${OIDC_ASSERTION}")"
           unset OIDC_ASSERTION
 
-          EXCHANGE_HTTP_STATUS="${EXCHANGE_RESPONSE##*$'\\n'__HTTP_STATUS__:}"
-          EXCHANGE_BODY="${EXCHANGE_RESPONSE%$'\\n'__HTTP_STATUS__:*}"
+          EXCHANGE_HTTP_STATUS="${EXCHANGE_RESPONSE##*$'\\n'}"
+          EXCHANGE_BODY="${EXCHANGE_RESPONSE%$'\\n'*}"
           if [[ "$EXCHANGE_HTTP_STATUS" != "200" ]]; then
             echo "RawTree token exchange returned HTTP ${EXCHANGE_HTTP_STATUS}."
             python -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps({k:d[k] for k in ("error","error_description","message","detail","code") if k in d}) or "RawTree returned an error response without a standard message.")' <<< "$EXCHANGE_BODY"
@@ -67,107 +65,6 @@ jobs:
           fi
 
           echo "RawTree issued a bearer token (expires_in=${EXPIRES_IN}s). Token value is redacted."
-
-          # Prove the exchanged identity can query the rule's configured database.
-          echo "STEP 3: Running SELECT 42 AS value against analytics."
-          QUERY_RESPONSE="$(curl --fail-with-body --silent --show-error \
-            -X POST "${RAWTREE_URL%/}/v1/query" \
-            -H "Authorization: Bearer ${RAWTREE_ACCESS_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -H "x-rawtree-database: ${RAWTREE_DATABASE}" \
-            --data '{"sql":"SELECT 42 AS value"}')"
-          unset RAWTREE_ACCESS_TOKEN
-
-          python -c 'import json,sys; r=json.load(sys.stdin); rows=r.get("data", []); ok=bool(rows) and rows[0].get("value")==42; print("PASS: GitHub OIDC assertion exchanged successfully and RawTree returned SELECT 42 AS value." if ok else "Unexpected query result: "+json.dumps(r)); sys.exit(0 if ok else 1)' <<< "$QUERY_RESPONSE"\n__HTTP_STATUS__:%{http_code}' \
-            -X POST "${RAWTREE_URL%/}/oauth/token" \
-            --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer' \
-            --data-urlencode "federation_rule_id=${RAWTREE_FEDERATION_RULE_ID}" \
-            --data-urlencode "assertion=${OIDC_ASSERTION}")"
-          unset OIDC_ASSERTION
-
-          EXCHANGE_HTTP_STATUS="${EXCHANGE_RESPONSE##*'__HTTP_STATUS__:}"
-          EXCHANGE_BODY="${EXCHANGE_RESPONSE%$'\\n'__HTTP_STATUS__:*}"
-          if [[ "$EXCHANGE_HTTP_STATUS" != "200" ]]; then
-            echo "RawTree token exchange returned HTTP ${EXCHANGE_HTTP_STATUS}."
-            python -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps({k:d[k] for k in ("error","error_description","message","detail","code") if k in d}) or "RawTree returned an error response without a standard message.")' <<< "$EXCHANGE_BODY"
-            exit 1
-          fi
-          echo "STEP 2 complete: RawTree issued an access token."
-
-          RAWTREE_ACCESS_TOKEN="$(python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' <<< "$EXCHANGE_BODY")"
-          TOKEN_TYPE="$(python -c 'import json,sys; print(json.load(sys.stdin).get("token_type", ""))' <<< "$EXCHANGE_BODY")"
-          EXPIRES_IN="$(python -c 'import json,sys; print(json.load(sys.stdin).get("expires_in", ""))' <<< "$EXCHANGE_BODY")"
-          unset EXCHANGE_RESPONSE EXCHANGE_BODY
-
-          if [[ "$TOKEN_TYPE" != "Bearer" ]]; then
-            echo "Unexpected token_type returned by RawTree."
-            exit 1
-          fi
-
-          echo "RawTree issued a bearer token (expires_in=${EXPIRES_IN}s). Token value is redacted."
-
-          # Prove the exchanged identity can query the rule's configured database.
-          echo "STEP 3: Running SELECT 42 AS value against analytics."
-          QUERY_RESPONSE="$(curl --fail-with-body --silent --show-error \
-            -X POST "${RAWTREE_URL%/}/v1/query" \
-            -H "Authorization: Bearer ${RAWTREE_ACCESS_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -H "x-rawtree-database: ${RAWTREE_DATABASE}" \
-            --data '{"sql":"SELECT 42 AS value"}')"
-          unset RAWTREE_ACCESS_TOKEN
-
-          python -c 'import json,sys; r=json.load(sys.stdin); rows=r.get("data", []); ok=bool(rows) and rows[0].get("value")==42; print("PASS: GitHub OIDC assertion exchanged successfully and RawTree returned SELECT 42 AS value." if ok else "Unexpected query result: "+json.dumps(r)); sys.exit(0 if ok else 1)' <<< "$QUERY_RESPONSE"\n'__HTTP_STATUS__:}"
-          EXCHANGE_BODY="${EXCHANGE_RESPONSE%'__HTTP_STATUS__:*}"
-          if [[ "$EXCHANGE_HTTP_STATUS" != "200" ]]; then
-            echo "RawTree token exchange returned HTTP ${EXCHANGE_HTTP_STATUS}."
-            python -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps({k:d[k] for k in ("error","error_description","message","detail","code") if k in d}) or "RawTree returned an error response without a standard message.")' <<< "$EXCHANGE_BODY"
-            exit 1
-          fi
-          echo "STEP 2 complete: RawTree issued an access token."
-
-          RAWTREE_ACCESS_TOKEN="$(python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' <<< "$EXCHANGE_BODY")"
-          TOKEN_TYPE="$(python -c 'import json,sys; print(json.load(sys.stdin).get("token_type", ""))' <<< "$EXCHANGE_BODY")"
-          EXPIRES_IN="$(python -c 'import json,sys; print(json.load(sys.stdin).get("expires_in", ""))' <<< "$EXCHANGE_BODY")"
-          unset EXCHANGE_RESPONSE EXCHANGE_BODY
-
-          if [[ "$TOKEN_TYPE" != "Bearer" ]]; then
-            echo "Unexpected token_type returned by RawTree."
-            exit 1
-          fi
-
-          echo "RawTree issued a bearer token (expires_in=${EXPIRES_IN}s). Token value is redacted."
-
-          # Prove the exchanged identity can query the rule's configured database.
-          echo "STEP 3: Running SELECT 42 AS value against analytics."
-          QUERY_RESPONSE="$(curl --fail-with-body --silent --show-error \
-            -X POST "${RAWTREE_URL%/}/v1/query" \
-            -H "Authorization: Bearer ${RAWTREE_ACCESS_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -H "x-rawtree-database: ${RAWTREE_DATABASE}" \
-            --data '{"sql":"SELECT 42 AS value"}')"
-          unset RAWTREE_ACCESS_TOKEN
-
-          python -c 'import json,sys; r=json.load(sys.stdin); rows=r.get("data", []); ok=bool(rows) and rows[0].get("value")==42; print("PASS: GitHub OIDC assertion exchanged successfully and RawTree returned SELECT 42 AS value." if ok else "Unexpected query result: "+json.dumps(r)); sys.exit(0 if ok else 1)' <<< "$QUERY_RESPONSE"\n'__HTTP_STATUS__:*}"
-          if [[ "$EXCHANGE_HTTP_STATUS" != "200" ]]; then
-            echo "RawTree token exchange returned HTTP ${EXCHANGE_HTTP_STATUS}."
-            python -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps({k:d[k] for k in ("error","error_description","message","detail","code") if k in d}) or "RawTree returned an error response without a standard message.")' <<< "$EXCHANGE_BODY"
-            exit 1
-          fi
-          echo "STEP 2 complete: RawTree issued an access token."
-
-          RAWTREE_ACCESS_TOKEN="$(python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' <<< "$EXCHANGE_BODY")"
-          TOKEN_TYPE="$(python -c 'import json,sys; print(json.load(sys.stdin).get("token_type", ""))' <<< "$EXCHANGE_BODY")"
-          EXPIRES_IN="$(python -c 'import json,sys; print(json.load(sys.stdin).get("expires_in", ""))' <<< "$EXCHANGE_BODY")"
-          unset EXCHANGE_RESPONSE EXCHANGE_BODY
-
-          if [[ "$TOKEN_TYPE" != "Bearer" ]]; then
-            echo "Unexpected token_type returned by RawTree."
-            exit 1
-          fi
-
-          echo "RawTree issued a bearer token (expires_in=${EXPIRES_IN}s). Token value is redacted."
-
-          # Prove the exchanged identity can query the rule's configured database.
           echo "STEP 3: Running SELECT 42 AS value against analytics."
           QUERY_RESPONSE="$(curl --fail-with-body --silent --show-error \
             -X POST "${RAWTREE_URL%/}/v1/query" \
