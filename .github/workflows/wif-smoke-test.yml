@@ -96,7 +96,7 @@ jobs:
           if [[ "$QUERY_HTTP_STATUS" != "200" ]]; then
             echo "FAILED: RawTree query returned HTTP ${QUERY_HTTP_STATUS}."
             echo "RawTree error response (no credentials included):"
-            python -c 'import json,sys; s=sys.stdin.read();\ntry: print(json.dumps(json.loads(s), indent=2))\nexcept Exception: print(s[:4000])' <<< "$QUERY_BODY"
+            python -m json.tool <<< "$QUERY_BODY" || head -c 4000 <<< "$QUERY_BODY"
             exit 1
           fi
 
