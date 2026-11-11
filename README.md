@@ -1,16 +1,12 @@
 # RawTree Workload Identity Federation smoke test
 
-This repository is intentionally minimal. It has one manually triggered GitHub Actions workflow and no application code or dependencies.
+This repository contains one manually triggered GitHub Actions workflow. It requests a GitHub OIDC assertion, exchanges it against the existing RawTree federation rule, and runs a harmless read-only query.
 
-## What this first workflow verifies
+## Existing RawTree rule
 
-It requests a GitHub Actions OIDC JWT with the audience `rawtree`, decodes its payload locally, and checks the exact claims intended for the RawTree configuration. It never prints or stores the JWT.
+The workflow is designed to use the **same rule already created in RawTree**. It does not create or update federation rules.
 
-This is the safe first step before enabling token exchange: it proves what GitHub is actually issuing, rather than guessing the subject or audience and risking a 400 `invalid_grant`.
-
-## Expected claims for this repository
-
-For this repository (created after GitHub's July 15, 2026 immutable-subject rollout), a workflow run on the `main` branch without a GitHub Environment should use:
+For a run on `main` without a GitHub Environment, the expected GitHub claims are:
 
 | Claim | Expected value |
 |---|---|
@@ -19,42 +15,44 @@ For this repository (created after GitHub's July 15, 2026 immutable-subject roll
 | `sub` | `repo:johnzouine-blip@355236458/rawtree-wif-demo@1453687571:ref:refs/heads/main` |
 | `ref` | `refs/heads/main` |
 
-The RawTree issuer must use the issuer URL exactly as shown. The federation rule's allowed audience must contain `rawtree`, and its `sub` claim condition must exactly match the subject above. RawTree claim conditions are exact matches.
+The existing RawTree rule must match this issuer, audience, and exact `sub` value, map to your selected RawTree principal, target the cluster containing `analytics`, and be enabled. The workflow does not configure a GitHub Environment because that would change the subject claim and no longer match the current branch-based rule.
 
-## RawTree federation rule to create
+For this query-only test, the rule should have `read_only` permission and database `analytics`. If the rule currently has a different `sub` condition, do not create a second rule; update the existing rule only if you intend to keep using this repository and branch as its trust boundary.
 
-Create the rule in the same RawTree cluster where the `analytics` database exists. Use these values:
+## GitHub repository variables
 
-| Field | Value |
+In the repository, open **Settings → Secrets and variables → Actions → Variables** and add these three **repository variables** (not secrets):
+
+| Variable | Value |
 |---|---|
-| Issuer URL | `https://token.actions.githubusercontent.com` |
-| Allowed audience | `rawtree` |
-| Claim condition | `sub` equals `repo:johnzouine-blip@355236458/rawtree-wif-demo@1453687571:ref:refs/heads/main` |
-| Principal type | Your chosen RawTree user or service account |
-| Principal ID | The UUID of that user or service account |
-| Permission | `read_only` for a query-only smoke test |
-| Database | `analytics` |
-| Enabled | Yes |
+| `RAWTREE_URL` | The API URL of the RawTree deployment serving the cluster with this rule |
+| `RAWTREE_FEDERATION_RULE_ID` | The ID of the existing federation rule above |
+| `RAWTREE_AUDIENCE` | `rawtree` |
 
-The rule also needs the target cluster selected. Do not use a GitHub Environment for this first test; the workflow is intentionally configured to run on `main` without one. The `sub` condition pins trust to this repository and branch.
+Do not add an API key or any long-lived RawTree credential. The workflow obtains its GitHub assertion at runtime and exchanges it for a short-lived RawTree bearer token.
 
-If the demo should insert rows from GitHub Actions rather than only authenticate and query, change the permission to `read_write`. Set exactly one of `permission` or `database_roles` in the rule.
+## What the workflow does
+
+1. Requests a fresh GitHub OIDC assertion for audience `rawtree`.
+2. Sends it to `POST $RAWTREE_URL/oauth/token` using the JWT-bearer grant and the configured existing `federation_rule_id`.
+3. Extracts the returned bearer token without printing it.
+4. Sends `POST $RAWTREE_URL/v1/query` with `{"sql":"SELECT 42 AS value"}` and the `x-rawtree-database: analytics` header.
+5. Passes only if RawTree returns `value = 42`.
+
+RawTree workload tokens last at most 15 minutes and never outlive the provider assertion. Each assertion can be exchanged only once per issuer configuration. The workflow requests a fresh assertion each time it runs; retry a failed exchange with a new workflow run rather than reusing an assertion.
 
 ## Run it
 
 1. In GitHub, open **Actions**.
 2. Select **RawTree WIF smoke test**.
 3. Select **Run workflow** and choose the `main` branch.
-4. Open the run and inspect the **Request GitHub OIDC token and inspect claims** step.
+4. Inspect the job log. It should report that RawTree issued a bearer token (with its value redacted), followed by the query PASS message.
 
-No repository secrets or GitHub Environment are needed. The expected subject includes the immutable owner and repository IDs reported by GitHub. GitHub automatically provides the OIDC request variables to jobs with `id-token: write`.
-
-## Token exchange comes next
-
-This workflow deliberately stops after claim verification. The RawTree token-exchange endpoint and request contract must be taken from the current RawTree API documentation before adding the exchange call. Do not guess the endpoint or grant payload.
+The workflow has `id-token: write`, which allows GitHub Actions to request the OIDC assertion. It does not need repository contents write permission, a GitHub Environment, repository secrets, or a RawTree API key.
 
 ## Error triage
 
-- **400 `invalid_grant`**: check issuer, audience, exact claim conditions, signing-key discovery/JWKS, `iat`/`nbf`/`exp`, and whether the assertion has already been consumed. Request a fresh JWT for every exchange attempt.
-- **401 on a later API request**: the issued RawTree token may have expired or been revoked.
-- **Permission error**: authentication succeeded; inspect the rule's principal, permission/database roles, cluster, and database scope.
+- **400 `invalid_grant`**: check issuer, audience, required claims, signing-key discovery/JWKS, expiry, exact rule conditions, and whether the assertion was already used. Run the workflow again to obtain a fresh assertion.
+- **401 on the query request**: the RawTree token may have expired or been revoked, or the rule/issuer/principal may have changed.
+- **Permission error**: authentication succeeded, but the rule or database permissions do not allow the query. Confirm the rule uses `read_only` (or a suitable existing database role) for `analytics`.
+- **Missing repository variable**: add the named variable under **Settings → Secrets and variables → Actions → Variables** and rerun.
