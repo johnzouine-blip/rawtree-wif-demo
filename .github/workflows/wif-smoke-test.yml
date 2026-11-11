@@ -1,50 +1,17 @@
-name: RawTree WIF smoke test
+name: RawTree WIF demo
 
 on:
   workflow_dispatch:
+
+run-name: RawTree WIF demo · ${{ github.ref_name }}
 
 permissions:
   contents: read
   id-token: write
 
 jobs:
-  api-key-baseline:
-    name: Baseline query using a RawTree API key
-    runs-on: ubuntu-latest
-    env:
-      RAWTREE_URL: ${{ vars.RAWTREE_URL }}
-      RAWTREE_API_KEY: ${{ secrets.RAWTREE_API_KEY }}
-      RAWTREE_DATABASE: analytics
-    steps:
-      - name: Check API key and RawTree URL configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-          : "${RAWTREE_URL:?Add repository variable RAWTREE_URL with the RawTree API base URL}"
-          : "${RAWTREE_API_KEY:?Add repository secret RAWTREE_API_KEY}"
-
-      - name: Run SELECT 42 using API-key authentication
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "API baseline: sending read-only query to RawTree."
-          RESPONSE="$(curl --silent --show-error --write-out '__HTTP_STATUS__%{http_code}' \
-            -X POST "${RAWTREE_URL%/}/v1/query" \
-            -H "Authorization: Bearer ${RAWTREE_API_KEY}" \
-            -H "Content-Type: application/json" \
-            -H "x-rawtree-database: ${RAWTREE_DATABASE}" \
-            --data '{"sql":"SELECT 42 AS value"}')"
-          HTTP_STATUS="${RESPONSE##*__HTTP_STATUS__}"
-          BODY="${RESPONSE%__HTTP_STATUS__*}"
-          if [[ "${HTTP_STATUS}" != "200" ]]; then
-            echo "API-key request returned HTTP ${HTTP_STATUS}."
-            printf '%s\n' "${BODY}"
-            exit 1
-          fi
-          python -c 'import json,sys; r=json.load(sys.stdin); rows=r.get("data", []); ok=bool(rows) and rows[0].get("value")==42; print("PASS: API-key authentication returned SELECT 42 AS value." if ok else "Unexpected query result: "+json.dumps(r)); sys.exit(0 if ok else 1)' <<< "${BODY}"
-
-  workload-identity-test:
-    name: Exchange GitHub OIDC token with RawTree
+  workload-identity-demo:
+    name: GitHub OIDC → RawTree → SQL
     runs-on: ubuntu-latest
     env:
       RAWTREE_URL: ${{ vars.RAWTREE_URL }}
@@ -52,7 +19,7 @@ jobs:
       RAWTREE_AUDIENCE: ${{ vars.RAWTREE_AUDIENCE }}
       RAWTREE_DATABASE: analytics
     steps:
-      - name: Exchange GitHub OIDC assertion and run a read-only query
+      - name: Run the WIF demonstration
         shell: bash
         run: |
           set -euo pipefail
@@ -63,19 +30,26 @@ jobs:
           : "${ACTIONS_ID_TOKEN_REQUEST_URL:?GitHub OIDC is unavailable}"
           : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?GitHub OIDC is unavailable}"
 
-          echo "STEP 1: Requesting GitHub OIDC assertion."
+          echo ""
+          echo "============================================================"
+          echo "  1/3  GITHUB OIDC IDENTITY"
+          echo "============================================================"
+          echo "Requesting a GitHub identity assertion..."
           OIDC_RESPONSE="$(curl --fail-with-body --silent --show-error --get \
             -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
             --data-urlencode "audience=${RAWTREE_AUDIENCE}" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}")"
           OIDC_ASSERTION="$(python -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<< "$OIDC_RESPONSE")"
           unset OIDC_RESPONSE
-          echo "STEP 1 complete: GitHub OIDC assertion received."
+          echo "GitHub issued the assertion. Decoded identity claims:"
+          python -c 'import base64,json,sys; t=sys.stdin.read().strip(); p=t.split(".")[1]; p += "="*((4-len(p)%4)%4); c=json.loads(base64.urlsafe_b64decode(p)); print(json.dumps({k:c.get(k) for k in ("iss","aud","sub")}, indent=2))' <<< "$OIDC_ASSERTION"
+          echo "SUCCESS: GitHub identity received (JWT value hidden)."
 
-          echo "Diagnostic: decoded identity claims (token itself is not printed)."
-          python -c 'import base64,json,sys; t=sys.stdin.read().strip(); p=t.split(".")[1]; p += "="*((4-len(p)%4)%4); c=json.loads(base64.urlsafe_b64decode(p)); print(json.dumps({k:c.get(k) for k in ("iss","aud","sub")}, sort_keys=True))' <<< "$OIDC_ASSERTION"
-
-          echo "STEP 2: Exchanging assertion with RawTree."
+          echo ""
+          echo "============================================================"
+          echo "  2/3  RAWTREE TOKEN EXCHANGE"
+          echo "============================================================"
+          echo "Exchanging the GitHub assertion with RawTree..."
           EXCHANGE_RESPONSE="$(curl --silent --show-error --write-out '__HTTP_STATUS__%{http_code}' \
             -X POST "${RAWTREE_URL%/}/oauth/token" \
             --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer' \
@@ -86,11 +60,10 @@ jobs:
           EXCHANGE_HTTP_STATUS="${EXCHANGE_RESPONSE##*__HTTP_STATUS__}"
           EXCHANGE_BODY="${EXCHANGE_RESPONSE%__HTTP_STATUS__*}"
           if [[ "$EXCHANGE_HTTP_STATUS" != "200" ]]; then
-            echo "RawTree token exchange returned HTTP ${EXCHANGE_HTTP_STATUS}."
+            echo "FAILED: RawTree token exchange returned HTTP ${EXCHANGE_HTTP_STATUS}."
             python -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps({k:d[k] for k in ("error","error_description","message","detail","code") if k in d}) or "RawTree returned an error response without a standard message.")' <<< "$EXCHANGE_BODY"
             exit 1
           fi
-          echo "STEP 2 complete: RawTree issued an access token."
 
           RAWTREE_ACCESS_TOKEN="$(python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' <<< "$EXCHANGE_BODY")"
           TOKEN_TYPE="$(python -c 'import json,sys; print(json.load(sys.stdin).get("token_type", ""))' <<< "$EXCHANGE_BODY")"
@@ -98,12 +71,18 @@ jobs:
           unset EXCHANGE_RESPONSE EXCHANGE_BODY
 
           if [[ "$TOKEN_TYPE" != "Bearer" ]]; then
-            echo "Unexpected token_type returned by RawTree."
+            echo "FAILED: RawTree returned an unexpected token type."
             exit 1
           fi
 
-          echo "RawTree issued a bearer token (expires_in=${EXPIRES_IN}s). Token value is redacted."
-          echo "STEP 3: Running SELECT 42 AS value against analytics."
+          echo "SUCCESS: RawTree issued a short-lived bearer token."
+          echo "Token lifetime: ${EXPIRES_IN} seconds. Token value is never printed."
+
+          echo ""
+          echo "============================================================"
+          echo "  3/3  DATABASE QUERY"
+          echo "============================================================"
+          echo "Running SELECT 42 AS value against ${RAWTREE_DATABASE}..."
           QUERY_RESPONSE="$(curl --fail-with-body --silent --show-error \
             -X POST "${RAWTREE_URL%/}/v1/query" \
             -H "Authorization: Bearer ${RAWTREE_ACCESS_TOKEN}" \
@@ -112,4 +91,9 @@ jobs:
             --data '{"sql":"SELECT 42 AS value"}')"
           unset RAWTREE_ACCESS_TOKEN
 
-          python -c 'import json,sys; r=json.load(sys.stdin); rows=r.get("data", []); ok=bool(rows) and rows[0].get("value")==42; print("PASS: GitHub OIDC assertion exchanged successfully and RawTree returned SELECT 42 AS value." if ok else "Unexpected query result: "+json.dumps(r)); sys.exit(0 if ok else 1)' <<< "$QUERY_RESPONSE"
+          python -c 'import json,sys; r=json.load(sys.stdin); rows=r.get("data", []); ok=bool(rows) and rows[0].get("value")==42; print("SUCCESS: Query returned value = 42." if ok else "Unexpected query result: "+json.dumps(r)); sys.exit(0 if ok else 1)' <<< "$QUERY_RESPONSE"
+
+          echo ""
+          echo "============================================================"
+          echo "  DEMO COMPLETE: GitHub OIDC → RawTree → SQL  ✓"
+          echo "============================================================"
