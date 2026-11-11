@@ -8,61 +8,70 @@ permissions:
   id-token: write
 
 jobs:
-  oidc-smoke-test:
-    name: Request GitHub OIDC assertion
+  workload-identity-test:
+    name: Exchange GitHub OIDC token with RawTree
     runs-on: ubuntu-latest
+    env:
+      RAWTREE_URL: ${{ vars.RAWTREE_URL }}
+      RAWTREE_FEDERATION_RULE_ID: ${{ vars.RAWTREE_FEDERATION_RULE_ID }}
+      RAWTREE_AUDIENCE: ${{ vars.RAWTREE_AUDIENCE }}
+      RAWTREE_DATABASE: analytics
     steps:
-      - name: Request GitHub OIDC token and inspect claims
+      - name: Exchange GitHub OIDC assertion and run a read-only query
         shell: bash
         run: |
           set -euo pipefail
 
-          : "${ACTIONS_ID_TOKEN_REQUEST_URL:?Missing GitHub OIDC request URL}"
-          : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?Missing GitHub OIDC request token}"
+          : "${RAWTREE_URL:?Add repository variable RAWTREE_URL}"
+          : "${RAWTREE_FEDERATION_RULE_ID:?Add repository variable RAWTREE_FEDERATION_RULE_ID}"
+          : "${RAWTREE_AUDIENCE:?Add repository variable RAWTREE_AUDIENCE}"
+          : "${ACTIONS_ID_TOKEN_REQUEST_URL:?GitHub OIDC is unavailable}"
+          : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?GitHub OIDC is unavailable}"
 
-          RESPONSE="$(curl --fail-with-body --silent --show-error \
+          # Request a fresh GitHub-signed assertion for the audience trusted by the rule.
+          OIDC_RESPONSE="$(curl --fail-with-body --silent --show-error --get \
             -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=rawtree")"
+            --data-urlencode "audience=${RAWTREE_AUDIENCE}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}")"
+          OIDC_ASSERTION="$(python -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<< "$OIDC_RESPONSE")"
+          unset OIDC_RESPONSE
 
-          TOKEN="$(python -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<< "$RESPONSE")"
-          export TOKEN
+          # Exchange the assertion against the existing, explicitly selected federation rule.
+          EXCHANGE_RESPONSE="$(curl --fail-with-body --silent --show-error \
+            -X POST "${RAWTREE_URL%/}/oauth/token" \
+            --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer' \
+            --data-urlencode "federation_rule_id=${RAWTREE_FEDERATION_RULE_ID}" \
+            --data-urlencode "assertion=${OIDC_ASSERTION}")"
+          unset OIDC_ASSERTION
 
-          python - <<'PY'
-          import base64, json, os, time
+          RAWTREE_ACCESS_TOKEN="$(python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' <<< "$EXCHANGE_RESPONSE")"
+          TOKEN_TYPE="$(python -c 'import json,sys; print(json.load(sys.stdin).get("token_type", ""))' <<< "$EXCHANGE_RESPONSE")"
+          EXPIRES_IN="$(python -c 'import json,sys; print(json.load(sys.stdin).get("expires_in", ""))' <<< "$EXCHANGE_RESPONSE")"
+          unset EXCHANGE_RESPONSE
 
-          token = os.environ["TOKEN"]
-          parts = token.split(".")
-          if len(parts) != 3:
-              raise SystemExit("GitHub did not return a three-part JWT")
+          if [[ "$TOKEN_TYPE" != "Bearer" ]]; then
+            echo "Unexpected token_type returned by RawTree."
+            exit 1
+          fi
 
-          payload = parts[1] + "=" * (-len(parts[1]) % 4)
-          claims = json.loads(base64.urlsafe_b64decode(payload))
+          echo "RawTree issued a bearer token (expires_in=${EXPIRES_IN}s). Token value is redacted."
 
-          expected = {
-              "iss": "https://token.actions.githubusercontent.com",
-              "aud": "rawtree",
-              "sub": "repo:johnzouine-blip@355236458/rawtree-wif-demo@1453687571:ref:refs/heads/main",
-          }
+          # Prove the exchanged identity can query the rule's configured database.
+          QUERY_RESPONSE="$(curl --fail-with-body --silent --show-error \
+            -X POST "${RAWTREE_URL%/}/v1/query" \
+            -H "Authorization: Bearer ${RAWTREE_ACCESS_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -H "x-rawtree-database: ${RAWTREE_DATABASE}" \
+            --data '{"sql":"SELECT 42 AS value"}')"
+          unset RAWTREE_ACCESS_TOKEN
 
-          print("GitHub OIDC claims (JWT redacted):")
-          for key in ("iss", "aud", "sub", "repository", "repository_owner", "ref", "event_name", "iat", "nbf", "exp", "jti"):
-              if key in claims:
-                  print(f"{key}: {claims[key]}")
-
-          errors = []
-          for key, value in expected.items():
-              actual = claims.get(key)
-              if actual != value and not (key == "aud" and isinstance(actual, list) and value in actual):
-                  errors.append(f"{key}: expected {value!r}, received {actual!r}")
-
-          if claims.get("exp", 0) <= time.time():
-              errors.append("exp: token is already expired")
-
-          if errors:
-              print("\nClaim check failed:")
-              for error in errors:
-                  print(f"- {error}")
+          python - <<'PY' <<< "$QUERY_RESPONSE"
+          import json, sys
+          result = json.load(sys.stdin)
+          rows = result.get("data", [])
+          if not rows or rows[0].get("value") != 42:
+              print("RawTree authenticated, but the validation query returned an unexpected result.")
+              print(json.dumps(result))
               raise SystemExit(1)
-
-          print("\nPASS: issuer, audience, subject, and expiry match the intended test configuration.")
+          print("PASS: GitHub OIDC assertion exchanged successfully and RawTree returned SELECT 42 AS value.")
           PY
