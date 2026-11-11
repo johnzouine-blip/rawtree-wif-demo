@@ -37,6 +37,9 @@ jobs:
           unset OIDC_RESPONSE
           echo "STEP 1 complete: GitHub OIDC assertion received."
 
+          echo "Diagnostic: decoded identity claims (token itself is not printed)."
+          python -c 'import base64,json,sys; t=sys.stdin.read().strip(); p=t.split(".")[1]; p += "="*((4-len(p)%4)%4); c=json.loads(base64.urlsafe_b64decode(p)); print(json.dumps({k:c.get(k) for k in ("iss","aud","sub")}, sort_keys=True))' <<< "$OIDC_ASSERTION"
+
           echo "STEP 2: Exchanging assertion with RawTree."
           EXCHANGE_RESPONSE="$(curl --silent --show-error --write-out '__HTTP_STATUS__%{http_code}' \
             -X POST "${RAWTREE_URL%/}/oauth/token" \
