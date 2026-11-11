@@ -8,6 +8,41 @@ permissions:
   id-token: write
 
 jobs:
+  api-key-baseline:
+    name: Baseline query using a RawTree API key
+    runs-on: ubuntu-latest
+    env:
+      RAWTREE_URL: ${{ vars.RAWTREE_URL }}
+      RAWTREE_API_KEY: ${{ secrets.RAWTREE_API_KEY }}
+      RAWTREE_DATABASE: analytics
+    steps:
+      - name: Check API key and RawTree URL configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${RAWTREE_URL:?Add repository variable RAWTREE_URL with the RawTree API base URL}"
+          : "${RAWTREE_API_KEY:?Add repository secret RAWTREE_API_KEY}"
+
+      - name: Run SELECT 42 using API-key authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "API baseline: sending read-only query to RawTree."
+          RESPONSE="$(curl --silent --show-error --write-out '__HTTP_STATUS__%{http_code}' \
+            -X POST "${RAWTREE_URL%/}/v1/query" \
+            -H "Authorization: Bearer ${RAWTREE_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "x-rawtree-database: ${RAWTREE_DATABASE}" \
+            --data '{"sql":"SELECT 42 AS value"}')"
+          HTTP_STATUS="${RESPONSE##*__HTTP_STATUS__}"
+          BODY="${RESPONSE%__HTTP_STATUS__*}"
+          if [[ "${HTTP_STATUS}" != "200" ]]; then
+            echo "API-key request returned HTTP ${HTTP_STATUS}."
+            printf '%s\n' "${BODY}"
+            exit 1
+          fi
+          python -c 'import json,sys; r=json.load(sys.stdin); rows=r.get("data", []); ok=bool(rows) and rows[0].get("value")==42; print("PASS: API-key authentication returned SELECT 42 AS value." if ok else "Unexpected query result: "+json.dumps(r)); sys.exit(0 if ok else 1)' <<< "${BODY}"
+
   workload-identity-test:
     name: Exchange GitHub OIDC token with RawTree
     runs-on: ubuntu-latest
