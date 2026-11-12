@@ -1,0 +1,20 @@
+name: Legacy Database Connection (API Key Example)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  connect-to-database:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Connect using a stored API key
+        env:
+          DB_API_KEY: ${{ secrets.DB_API_KEY }}
+        run: |
+          if [ -z "$DB_API_KEY" ]; then
+            echo "DB_API_KEY secret is not configured."
+            exit 1
+          fi
+
+          echo "Database credential loaded from GitHub Secrets."
+          echo "A database client would use DB_API_KEY here."
